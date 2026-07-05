@@ -1,0 +1,17 @@
+# Dataset root directory
+path: D:/Pothole Training/datasets/datasetninja_yolo
+
+# Training and validation image directories
+train: images/ds1_simplex-train
+val: images/ds2_complex-test
+
+# Number of classes and their names
+nc: 1
+names: ['pothole']
+
+
+
+#Pothole Training 
+#yolo task=detect mode=train model=yolov8m.pt data="D:/Pothole Training/datasets/datasetninja_yolo/pothole_dataset.yaml" epochs=100 imgsz=640 batch=4 workers=0 half=True name=yolov8m_pothole_detection_final device=0
+
+#yolo task=detect mode=train model="D:/Pothole Training/runs/detect/yolov8m_final_retrain/weights/last.pt" data="D:/Pothole Training/datasets/datasetninja_yolo/pothole_dataset.yaml" epochs=200 imgsz=640 batch=4 workers=0 half=True cache=True name=yolov8m_final_retrain_resume device=0 resume=True
