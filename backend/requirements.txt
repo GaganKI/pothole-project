@@ -1,18 +1,27 @@
+# Web framework
 Flask==3.0.3
 Flask-CORS==4.0.0
 Werkzeug==3.0.3
+gunicorn==22.0.0
 
-torch==2.4.1
-torchvision==0.19.1
+# ML — CPU only for deployment
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.9.0+cpu
+torchvision==0.24.0+cpu
 
+# Computer vision
 ultralytics==8.3.10
-
-opencv-python==4.10.0.84
+opencv-python-headless==4.10.0.84
 Pillow==10.4.0
 numpy==2.0.2
+
+# MiDaS dependencies
 timm==1.0.9
 transformers==4.44.2
 requests==2.32.3
-python-dotenv==1.0.1
 
+# Database
 psycopg2-binary==2.9.9
+
+# Environment
+python-dotenv==1.0.1
