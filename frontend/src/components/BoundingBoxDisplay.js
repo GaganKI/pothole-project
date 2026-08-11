@@ -25,8 +25,16 @@ const BoundingBoxDisplay = ({ imageSrc, detectionResults }) => {
       // Draw bounding boxes safely
         if (detectionResults?.potholes && Array.isArray(detectionResults.potholes)) {
             detectionResults.potholes.forEach((pothole, index) => {
-          const { bbox, confidence } = pothole;
-          const [x, y, width, height] = bbox;
+          const { bbox_xyxy, confidence } = pothole;
+          if (!bbox_xyxy || bbox_xyxy.length < 4) return; // guard clause
+
+          const [x1, y1, x2, y2] = bbox_xyxy;
+          // bbox_xyxy is x1,y1,x2,y2 format (not x,y,width,height)
+          // Convert to width/height for drawing:
+          const x = x1;
+          const y = y1;
+          const width = x2 - x1;
+          const height = y2 - y1;
 
           // Set box style based on confidence
           const alpha = Math.max(0.3, confidence);

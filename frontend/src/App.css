@@ -3300,3 +3300,43 @@ body {
     justify-content: center;
   }
 }
+
+/* Survey stats compact box */
+.survey-stats-compact {
+  display: flex;
+  gap: 1rem;
+  margin: 0.5rem 0;
+  flex-wrap: wrap;
+}
+
+.stat-compact {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  background: #f0f4ff;
+  border: 1px solid #d0d8f0;
+  border-radius: 8px;
+  padding: 0.5rem 1rem;
+  min-width: 70px;
+  transition: background 0.2s, border-color 0.2s;
+}
+
+.stat-compact:hover {
+  background: #e0e8ff;
+  border-color: #667eea;
+}
+
+.stat-num {
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: #4f46e5;   /* indigo — visible, not grey */
+  line-height: 1.2;
+}
+
+.stat-text {
+  font-size: 0.7rem;
+  color: #6b7280;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-top: 0.2rem;
+}

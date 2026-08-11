@@ -1,11 +1,14 @@
-import React, { useRef, useState, useEffect } from 'react';
-import { detectPotholes } from '../api/api';
+import React, { useRef, useState, useEffect, useCallback } from 'react';
+import { detectPotholes, savePothole } from '../api/api';
 import BoundingBoxDisplay from './BoundingBoxDisplay';
 
 const CameraCapture = ({ onPotholeDetected }) => {
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
   const liveCanvasRef = useRef(null);
+  const isProcessingFrame = useRef(false);
+  const recentlySavedLocations = useRef(new Set());
+  const locationWatchRef = useRef(null);
   const [isStreaming, setIsStreaming] = useState(false);
   const [capturedImage, setCapturedImage] = useState(null);
   const [detectionResults, setDetectionResults] = useState(null);
@@ -23,29 +26,39 @@ const CameraCapture = ({ onPotholeDetected }) => {
   const liveDetectionInterval = useRef(null);
 
   useEffect(() => {
-  // Get user's live location with high accuracy
-  if (navigator.geolocation) {
-    navigator.geolocation.getCurrentPosition(
-      (position) => {
-        setLocation({
-          latitude: position.coords.latitude,
-          longitude: position.coords.longitude
-        });
-      },
-      (error) => {
-        console.error('Error getting location:', error);
-        setError('Location access denied. Please enable location services.');
-        // Don't set any default location - wait for user to enable GPS
-      },
-      {
-        enableHighAccuracy: true,
-        timeout: 10000,
-        maximumAge: 60000
-      }
-    );
-  }
+    if (navigator.geolocation) {
+      // Watch position continuously instead of one-time get
+      locationWatchRef.current = navigator.geolocation.watchPosition(
+        (position) => {
+          setLocation({
+            latitude: position.coords.latitude,
+            longitude: position.coords.longitude
+          });
+          setError(null);
+        },
+        (error) => {
+          console.error('Error getting location:', error);
+          if (!location) {
+            setError('Location access denied. Please enable location services.');
+          }
+        },
+        {
+          enableHighAccuracy: true,
+          timeout: 10000,
+          maximumAge: 5000 // accept 5 second old position
+        }
+      );
+    }
 
-    // Load survey history from localStorage (only for UI history, not pothole data)
+    // Cleanup — stop watching when component unmounts
+    return () => {
+      if (locationWatchRef.current !== null) {
+        navigator.geolocation.clearWatch(locationWatchRef.current);
+      }
+    };
+  }, []); // run once on mount
+
+  useEffect(() => {
     const savedHistory = localStorage.getItem('surveyHistory');
     if (savedHistory) {
       try {
@@ -56,9 +69,38 @@ const CameraCapture = ({ onPotholeDetected }) => {
     }
   }, []);
 
+  const sanitiseSurveyName = (name) => {
+    // Remove HTML tags, limit length, trim whitespace
+    return name
+      .replace(/<[^>]*>/g, '')           // strip HTML tags
+      .replace(/[<>"'&]/g, '')           // strip dangerous chars
+      .trim()
+      .substring(0, 50);                 // max 50 chars
+  };
+
+  const saveToLocalStorage = (key, data) => {
+    try {
+      const serialised = JSON.stringify(data);
+      if (serialised.length > 500000) { // 500KB limit
+        console.warn('Survey history too large, trimming oldest entries');
+        const trimmed = data.slice(0, 10); // keep only last 10
+        localStorage.setItem(key, JSON.stringify(trimmed));
+      } else {
+        localStorage.setItem(key, serialised);
+      }
+    } catch (e) {
+      if (e.name === 'QuotaExceededError') {
+        console.error('localStorage full — clearing old survey history');
+        localStorage.removeItem(key);
+      }
+    }
+  };
+
   const startSurvey = () => {
-    if (!currentSurvey.trim()) {
-      setError('Please enter a survey name');
+    const cleanName = sanitiseSurveyName(currentSurvey);
+    
+    if (!cleanName) {
+      setError('Please enter a valid survey name');
       return;
     }
 
@@ -69,7 +111,7 @@ const CameraCapture = ({ onPotholeDetected }) => {
 
     const surveyData = {
       id: `survey_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`,
-      name: currentSurvey.trim(),
+      name: cleanName,
       startTime: new Date().toISOString(),
       location: {
         latitude: location.latitude,
@@ -80,6 +122,7 @@ const CameraCapture = ({ onPotholeDetected }) => {
       potholesDetected: 0
     };
 
+    setCurrentSurvey(cleanName);
     setSurveyStarted(true);
     setShowModeSelection(true);
     setSurveyPotholes([]);
@@ -87,12 +130,19 @@ const CameraCapture = ({ onPotholeDetected }) => {
     // Save survey metadata to localStorage (just for UI history)
     const updatedHistory = [surveyData, ...surveyHistory.slice(0, 19)];
     setSurveyHistory(updatedHistory);
-    localStorage.setItem('surveyHistory', JSON.stringify(updatedHistory));
+    saveToLocalStorage('surveyHistory', updatedHistory);
 
     setError(null);
   };
 
   const stopSurvey = async () => {
+    if (surveyPotholes.length > 0) {
+      const confirmed = window.confirm(
+        `Stop survey "${currentSurvey}"? ${surveyPotholes.length} potholes have been recorded.`
+      );
+      if (!confirmed) return;
+    }
+
     // Stop all detection activities first
     stopLiveDetection();
     stopCamera();
@@ -109,7 +159,7 @@ const CameraCapture = ({ onPotholeDetected }) => {
         : survey
     );
     setSurveyHistory(updatedHistory);
-    localStorage.setItem('surveyHistory', JSON.stringify(updatedHistory));
+    saveToLocalStorage('surveyHistory', updatedHistory);
     
     // Reset all states
     setSurveyStarted(false);
@@ -127,91 +177,75 @@ const CameraCapture = ({ onPotholeDetected }) => {
     startCamera();
   };
 
-  // Function to save image to backend and get file path
-  const saveImageToBackend = async (imageDataUrl) => {
-    try {
-      const response = await fetch(imageDataUrl);
-      const blob = await response.blob();
-      
-      const formData = new FormData();
-      formData.append('image', blob, `pothole_${Date.now()}.jpg`);
-      formData.append('survey_name', currentSurvey);
-      
-      // Call backend endpoint to save image
-      const saveResponse = await fetch('/api/save-image', {
-        method: 'POST',
-        body: formData
-      });
-      
-      if (saveResponse.ok) {
-        const result = await saveResponse.json();
-        return result.imagePath; // Return the file path where image is saved
-      } else {
-        console.error('Failed to save image to backend');
-        return null;
-      }
-    } catch (error) {
-      console.error('Error saving image:', error);
-      return null;
-    }
-  };
-
   // OLD CODE - REMOVE savePotholurvey function entirely
 
 // NEW CODE - ADD THIS
 const savePotholeToDatabase = async (potholeData, imageData = null) => {
+  // Simple deduplication — skip if we saved a pothole very recently
+  // at nearly the same coordinates (within ~10 meters)
+  const coordKey = `${(potholeData.latitude ?? 0).toFixed(4)}_${(potholeData.longitude ?? 0).toFixed(4)}`;
+
+  if (recentlySavedLocations.current.has(coordKey)) {
+    console.log('Skipping duplicate pothole at same coordinates');
+    return null;
+  }
+
+  // Add to recent saves — auto-remove after 30 seconds
+  recentlySavedLocations.current.add(coordKey);
+  setTimeout(() => {
+    recentlySavedLocations.current.delete(coordKey);
+  }, 30000); // 30 second cooldown per coordinate
+
   const enhancedPothole = {
     ...potholeData,
     survey_name: currentSurvey,
     pothole_id: `PH_${currentSurvey.replace(/\s+/g, '_')}_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`.toUpperCase(),
     detected_at: new Date().toISOString(),
     area: location ? `${location.latitude.toFixed(4)}, ${location.longitude.toFixed(4)}` : 'Unknown',
-    latitude: location?.latitude || 0,
-    longitude: location?.longitude || 0
+    latitude: location?.latitude ?? null,
+    longitude: location?.longitude ?? null
   };
 
-  // Add to current survey potholes
-  setSurveyPotholes(prev => [...prev, enhancedPothole]);
-
-  // Send to backend database
+  // Save to database FIRST — only update UI if it succeeds
   try {
     const formData = new FormData();
     formData.append('pothole_data', JSON.stringify(enhancedPothole));
-    
+
     if (imageData) {
-      // Convert base64 to blob for image upload
       const response = await fetch(imageData);
       const blob = await response.blob();
       formData.append('pothole_image', blob, `${enhancedPothole.pothole_id}.jpg`);
     }
 
-    const response = await fetch('/api/save_pothole', {
-      method: 'POST',
-      body: formData
-    });
+    const { savePothole } = await import('../api/api');
+    const result = await savePothole(formData);
 
-    if (response.ok) {
-      console.log('Pothole saved to database successfully');
+    if (result && result.success) {
+      // Only add to UI after confirmed DB save
+      setSurveyPotholes(prev => [...prev, enhancedPothole]);
+
+      // Update survey history count
+      const updatedHistory = surveyHistory.map(survey =>
+        survey.name === currentSurvey && survey.status === 'active'
+          ? { ...survey, potholesDetected: (survey.potholesDetected || 0) + 1 }
+          : survey
+      );
+      setSurveyHistory(updatedHistory);
+      localStorage.setItem('surveyHistory', JSON.stringify(updatedHistory));
+
+      return { ...enhancedPothole, savedToDb: true };
     } else {
-      console.error('Failed to save pothole to database');
+      console.error('DB save returned failure:', result);
+      // Still add to UI but mark as not saved
+      setSurveyPotholes(prev => [...prev, { ...enhancedPothole, savedToDb: false }]);
+      return { ...enhancedPothole, savedToDb: false };
     }
   } catch (error) {
-    console.error('Error saving pothole:', error);
+    console.error('Error saving pothole to database:', error);
+    // Add to UI but mark as failed
+    setSurveyPotholes(prev => [...prev, { ...enhancedPothole, savedToDb: false }]);
+    return { ...enhancedPothole, savedToDb: false };
   }
-
-  // Update survey history (keep minimal data in localStorage)
-  const updatedHistory = surveyHistory.map(survey => 
-    survey.name === currentSurvey && survey.status === 'active'
-      ? { 
-          ...survey, 
-          potholesDetected: (survey.potholesDetected || 0) + 1
-        }
-      : survey
-  );
-  setSurveyHistory(updatedHistory);
-  localStorage.setItem('surveyHistory', JSON.stringify(updatedHistory));
-
-  return enhancedPothole;
 };
 
   const startCamera = async () => {
@@ -285,7 +319,7 @@ const savePotholeToDatabase = async (potholeData, imageData = null) => {
     }, 2000);
   };
 
-  const stopLiveDetection = () => {
+  const stopLiveDetection = useCallback(() => {
     setIsLiveDetecting(false);
     setLiveDetections([]);
     
@@ -298,15 +332,19 @@ const savePotholeToDatabase = async (potholeData, imageData = null) => {
       const ctx = liveCanvasRef.current.getContext('2d');
       ctx.clearRect(0, 0, liveCanvasRef.current.width, liveCanvasRef.current.height);
     }
-  };
+  }, []);
 
   // Replace the entire performLiveDetection function with this:
 const performLiveDetection = async () => {
-  if (!videoRef.current || !liveCanvasRef.current) return;
+  // Skip if already processing a frame
+  if (isProcessingFrame.current) return;
+  if (!videoRef.current || !canvasRef.current) return;
+
+  isProcessingFrame.current = true;
 
   try {
     const video = videoRef.current;
-    const canvas = document.createElement('canvas');
+    const canvas = canvasRef.current; // use existing hidden canvas — not a new one
     const context = canvas.getContext('2d');
 
     canvas.width = video.videoWidth;
@@ -316,10 +354,10 @@ const performLiveDetection = async () => {
     const imageDataUrl = canvas.toDataURL('image/jpeg', 0.6);
     const response = await fetch(imageDataUrl);
     const blob = await response.blob();
-    
+
     const formData = new FormData();
     formData.append('image', blob, 'live_frame.jpg');
-    
+
     if (location) {
       formData.append('latitude', location.latitude);
       formData.append('longitude', location.longitude);
@@ -329,17 +367,16 @@ const performLiveDetection = async () => {
     formData.append('detection_type', 'live');
 
     const results = await detectPotholes(formData);
-    
+
     if (results.potholes && results.potholes.length > 0) {
       const enhancedPotholes = [];
-      
+
       for (const pothole of results.potholes) {
-        const enhancedPothole = await savePotholeToDatabase({
-          ...pothole,
-          detection_type: 'live'
-        }, imageDataUrl); // Save image to database
-        
-        enhancedPotholes.push(enhancedPothole);
+        const enhancedPothole = await savePotholeToDatabase(
+          { ...pothole, detection_type: 'live' },
+          imageDataUrl
+        );
+        if (enhancedPothole) enhancedPotholes.push(enhancedPothole); // skip nulls
       }
 
       setLiveDetections(enhancedPotholes);
@@ -350,6 +387,8 @@ const performLiveDetection = async () => {
     }
   } catch (err) {
     console.error('Live detection error:', err);
+  } finally {
+    isProcessingFrame.current = false; // always release lock
   }
 };
 
@@ -365,8 +404,10 @@ const performLiveDetection = async () => {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
     detections.forEach((pothole, index) => {
-      if (pothole.bbox) {
-        const [x, y, width, height] = pothole.bbox;
+      if (pothole.bbox_xyxy && pothole.bbox_xyxy.length === 4) {
+        const [x1, y1, x2, y2] = pothole.bbox_xyxy;
+        const x = x1, y = y1;
+        const width = x2 - x1, height = y2 - y1;
         const confidence = pothole.confidence;
         
         const alpha = Math.max(0.6, confidence);
@@ -387,7 +428,7 @@ const performLiveDetection = async () => {
         ctx.fillText(label, x + 8, y - 10);
 
         if (confidence > 0.7) {
-          ctx.strokeStyle = `rgba(255, 255, 0, ${0.8 * Math.sin(Date.now() / 200)})`;
+          ctx.strokeStyle = 'rgba(255, 200, 0, 0.9)';
           ctx.lineWidth = 5;
           ctx.strokeRect(x - 2, y - 2, width + 4, height + 4);
         }
@@ -465,17 +506,12 @@ const performLiveDetection = async () => {
   };
 
   useEffect(() => {
-    return () => {
-      stopCamera();
-      stopLiveDetection();
-    };
-  }, []);
+    return () => { stopCamera(); stopLiveDetection(); };
+  }, [stopLiveDetection]);
 
   useEffect(() => {
-    if (!isStreaming) {
-      stopLiveDetection();
-    }
-  }, [isStreaming]);
+    if (!isStreaming) stopLiveDetection();
+  }, [isStreaming, stopLiveDetection]);
 
   if (!surveyStarted) {
     return (
@@ -540,22 +576,16 @@ const performLiveDetection = async () => {
           <div className="mode-selection-section">
             <h4>Choose Detection Mode:</h4>
             <div className="mode-selection-grid">
-              <div 
-                className="mode-selection-card"
-                onClick={() => selectDetectionMode('live')}
-              >
+              <div className="mode-selection-card">
                 <div className="mode-icon">📹</div>
                 <h5>Live Detection</h5>
-                <button className="btn btn-primary">Start Live Detection</button>
+                <button className="btn btn-primary" onClick={() => selectDetectionMode('live')}>Start Live Detection</button>
               </div>
 
-              <div 
-                className="mode-selection-card"
-                onClick={() => selectDetectionMode('capture')}
-              >
+              <div className="mode-selection-card">
                 <div className="mode-icon">📸</div>
                 <h5>Capture Mode</h5>
-                <button className="btn btn-success">Start Capture Mode</button>
+                <button className="btn btn-success" onClick={() => selectDetectionMode('capture')}>Start Capture Mode</button>
               </div>
             </div>
           </div>
@@ -620,11 +650,21 @@ const performLiveDetection = async () => {
             )}
           </div>
         ) : (
-          <div className="captured-image-container">
+          <div className="captured-image-container" style={{ position: 'relative' }}>
             <BoundingBoxDisplay
               imageSrc={capturedImage}
               detectionResults={detectionResults}
             />
+            {isDetecting && (
+              <div style={{
+                position: 'absolute', inset: 0,
+                background: 'rgba(0,0,0,0.5)',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                color: 'white', fontSize: '1.2rem', borderRadius: '8px'
+              }}>
+                <div>⏳ Analyzing image...</div>
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -706,7 +746,11 @@ const performLiveDetection = async () => {
       {detectionResults && detectionMode === 'capture' && (
         <div className="detection-summary">
           <div className="summary-header">
-            <h3>✅ Detection Complete - Saved to Database</h3>
+            {detectionResults.potholes?.length > 0 ? (
+              <h3>✅ Detection Complete — {detectionResults.potholes.length} Pothole(s) Found</h3>
+            ) : (
+              <h3>✅ Analysis Complete — No Potholes Detected</h3>
+            )}
             <div className="detection-count">
               {detectionResults.potholes ? detectionResults.potholes.length : 0} Potholes Found
             </div>
@@ -735,7 +779,9 @@ const performLiveDetection = async () => {
                 </div>
                 <div className="detail-item">
                   <span className="detail-label">💾 Status:</span>
-                  <span className="detail-value success">Saved to Database</span>
+                  <span className={`detail-value ${pothole.savedToDb !== false ? 'success' : 'error'}`}>
+                    {pothole.savedToDb !== false ? 'Saved to Database' : '⚠️ Save Failed — Local Only'}
+                  </span>
                 </div>
               </div>
             </div>

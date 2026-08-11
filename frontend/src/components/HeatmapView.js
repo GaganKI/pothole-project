@@ -1,8 +1,18 @@
-import React, { useEffect, useState, useRef } from 'react';
+import React, { useEffect, useState, useRef, useMemo } from 'react';
 import { MapContainer, TileLayer, Marker, Popup, useMap } from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import { getAllPotholes } from '../api/api';
+import 'leaflet.heat';
+
+const isValidCoordinate = (lat, lng) => {
+  return (
+    typeof lat === 'number' && typeof lng === 'number' &&
+    lat >= -90 && lat <= 90 &&
+    lng >= -180 && lng <= 180 &&
+    !(lat === 0 && lng === 0) // reject null island
+  );
+};
 
 // Fix for default markers
 delete L.Icon.Default.prototype._getIconUrl;
@@ -94,6 +104,17 @@ const HeatmapLayer = ({ potholes }) => {
   return null;
 };
 
+// Map updater component
+const MapUpdater = ({ center, zoom }) => {
+  const map = useMap();
+
+  useEffect(() => {
+    map.setView(center, zoom);
+  }, [center, zoom, map]);
+
+  return null;
+};
+
 const HeatmapView = ({ newPothole }) => {
   const [potholes, setPotholes] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -134,7 +155,7 @@ const HeatmapView = ({ newPothole }) => {
       }
     );
   }
-}, []);
+  }, []);
 
   useEffect(() => {
     // Load potholes from localStorage for completed surveys
@@ -227,7 +248,9 @@ const HeatmapView = ({ newPothole }) => {
   };
 
   const formatDate = (dateString) => {
-    return new Date(dateString).toLocaleString();
+    if (!dateString) return 'Unknown';
+    const d = new Date(dateString);
+    return isNaN(d.getTime()) ? 'Invalid date' : d.toLocaleString();
   };
 
   const getSeverityFromConfidence = (confidence, depth) => {
@@ -277,7 +300,7 @@ const HeatmapView = ({ newPothole }) => {
       },
       (error) => {
         console.error('Error getting location:', error);
-        alert('Unable to get your location. Please enable GPS.');
+        setError('Unable to get your location. Please enable GPS and try again.');
       },
       {
         enableHighAccuracy: true,
@@ -292,6 +315,8 @@ const HeatmapView = ({ newPothole }) => {
     setCenter([20.5937, 78.9629]);
     setZoom(5);
   };
+
+  const surveyStats = useMemo(() => getSurveyStats(), [potholes]);
 
   if (loading) {
     return (
@@ -312,8 +337,6 @@ const HeatmapView = ({ newPothole }) => {
       </div>
     );
   }
-
-  const surveyStats = getSurveyStats();
 
   return (
     <div className="heatmap-view">
@@ -383,16 +406,24 @@ const HeatmapView = ({ newPothole }) => {
           zoom={zoom}
           style={{ height: '400px', width: '100%' }}
           scrollWheelZoom={true}
-          key={`${center[0]}-${center[1]}-${zoom}`}
         >
+          <MapUpdater center={center} zoom={zoom} />
           <TileLayer
             attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
             url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
           />
           
-          {showHeatmap && <HeatmapLayer potholes={filteredPotholes} />}
+          {showHeatmap && (
+            <HeatmapLayer
+              potholes={filteredPotholes.filter(
+                p => isValidCoordinate(p.latitude, p.longitude)
+              )}
+            />
+          )}
           
-          {showMarkers && filteredPotholes.map((pothole) => {
+          {showMarkers && filteredPotholes
+            .filter(p => isValidCoordinate(p.latitude, p.longitude))
+            .map((pothole) => {
             const severity = getSeverityFromConfidence(pothole.confidence, pothole.depth);
             return (
               <Marker

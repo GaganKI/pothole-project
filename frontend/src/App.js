@@ -75,7 +75,7 @@ function App() {
 
       <footer className="app-footer">
         <div className="footer-content">
-          <p>&copy; 2025 Smart Pothole Detection System</p>
+          <p>&copy; {new Date().getFullYear()} Smart Pothole Detection System</p>
         </div>
       </footer>
     </div>
