@@ -1,5 +1,5 @@
 import React, { useRef, useState, useEffect, useCallback } from 'react';
-import { detectPotholes, savePothole } from '../api/api';
+import { detectPotholes } from '../api/api';
 import BoundingBoxDisplay from './BoundingBoxDisplay';
 
 const CameraCapture = ({ onPotholeDetected }) => {
@@ -51,12 +51,13 @@ const CameraCapture = ({ onPotholeDetected }) => {
     }
 
     // Cleanup — stop watching when component unmounts
-    return () => {
+        return () => {
       if (locationWatchRef.current !== null) {
         navigator.geolocation.clearWatch(locationWatchRef.current);
       }
     };
-  }, []); // run once on mount
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);//run once on mount
 
   useEffect(() => {
     const savedHistory = localStorage.getItem('surveyHistory');

@@ -160,6 +160,7 @@ const HeatmapView = ({ newPothole }) => {
   useEffect(() => {
     // Load potholes from localStorage for completed surveys
     loadPotholesFromStorage();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [surveyHistory]);
 
   useEffect(() => {
@@ -316,7 +317,11 @@ const HeatmapView = ({ newPothole }) => {
     setZoom(5);
   };
 
-  const surveyStats = useMemo(() => getSurveyStats(), [potholes]);
+  const surveyStats = useMemo(
+  () => getSurveyStats(),
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  [potholes]
+);
 
   if (loading) {
     return (
