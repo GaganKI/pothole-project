@@ -2,10 +2,57 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Pothole Detection</title>
+    <link rel="icon" href="%PUBLIC_URL%/favicon.ico" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#E8A427" media="(prefers-color-scheme: dark)" />
+    <meta name="theme-color" content="#E8A427" media="(prefers-color-scheme: light)" />
+
+    <!-- PWA / App -->
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="SmartRoad" />
+    <meta name="application-name" content="SmartRoad" />
+
+    <!-- Security headers via meta (backup — real headers set on Vercel) -->
+    <meta http-equiv="X-Content-Type-Options" content="nosniff" />
+    <meta name="referrer" content="strict-origin-when-cross-origin" />
+
+    <!-- SEO -->
+    <meta name="description" content="SmartRoad — AI-powered pothole detection using YOLOv8m and MiDaS depth estimation. Real-time road health monitoring with geospatial analytics." />
+    <meta name="keywords" content="pothole detection, AI, YOLOv8, road monitoring, smart city" />
+
+    <!-- Open Graph -->
+    <meta property="og:title" content="SmartRoad — AI Pothole Detection" />
+    <meta property="og:description" content="Real-time pothole detection with YOLOv8m + MiDaS depth estimation" />
+    <meta property="og:type" content="website" />
+
+    <!-- Manifest -->
+    <link rel="manifest" href="%PUBLIC_URL%/manifest.json" />
+
+    <!-- Apple touch icon -->
+    <link rel="apple-touch-icon" href="%PUBLIC_URL%/logo192.png" />
+
+    <!-- Preconnect fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+
+    <title>SmartRoad — AI Pothole Detection</title>
   </head>
   <body>
+    <noscript>SmartRoad requires JavaScript to run the AI detection system.</noscript>
     <div id="root"></div>
+
+    <!-- Register Service Worker -->
+    <script>
+      if ('serviceWorker' in navigator) {
+        window.addEventListener('load', () => {
+          navigator.serviceWorker
+            .register('/sw.js')
+            .then(reg => console.log('SW registered:', reg.scope))
+            .catch(err => console.warn('SW registration failed:', err));
+        });
+      }
+    </script>
   </body>
 </html>

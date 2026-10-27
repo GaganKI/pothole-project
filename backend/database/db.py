@@ -4,15 +4,19 @@ from psycopg2.extras import RealDictCursor
 from psycopg2.pool import ThreadedConnectionPool
 import logging
 from contextlib import contextmanager
+from dotenv import load_dotenv
+load_dotenv()
+
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
 
 class DatabaseManager:
     def __init__(self):
         self.connection_pool = None
         self.init_connection_pool()
-    
+
     def init_connection_pool(self):
         """Initialize connection pool"""
         try:
@@ -22,23 +26,25 @@ class DatabaseManager:
                 'port': os.getenv('DB_PORT', '5432'),
                 'database': os.getenv('DB_NAME', 'pothole_db'),
                 'user': os.getenv('DB_USER', 'postgres'),
-                'password': os.getenv('DB_PASSWORD', 'password')
+                'password': os.getenv('DB_PASSWORD', 'password'),
+                'sslmode': os.getenv('DB_SSLMODE', 'require')  # Render requires SSL
             }
-            
+
             self.connection_pool = ThreadedConnectionPool(
                 minconn=1,
                 maxconn=20,
                 **db_config
             )
+
             logger.info("Database connection pool initialized successfully")
-            
+
             # Create tables if they don't exist
             self.create_tables()
-            
+
         except Exception as e:
             logger.error(f"Failed to initialize database connection pool: {e}")
             raise
-    
+
     @contextmanager
     def get_connection(self):
         """Context manager for database connections"""
@@ -54,7 +60,7 @@ class DatabaseManager:
         finally:
             if conn:
                 self.connection_pool.putconn(conn)
-    
+
     def create_tables(self):
         """Create necessary tables with all required fields"""
         try:
@@ -63,67 +69,68 @@ class DatabaseManager:
                     # Enable PostGIS extension
                     logger.info("Enabling PostGIS extension...")
                     cursor.execute("CREATE EXTENSION IF NOT EXISTS postgis;")
-                    
+
                     # Drop existing table to recreate with new schema
                     logger.info("Updating database schema...")
-                    cursor.execute("DROP TABLE IF EXISTS potholes CASCADE;")
-                    
+                    if os.getenv('RESET_DB', 'false').lower() == 'true':
+                        cursor.execute("DROP TABLE IF EXISTS potholes CASCADE;")
+
                     # Create enhanced potholes table
                     logger.info("Creating enhanced potholes table...")
                     create_table_sql = """
-                    CREATE TABLE potholes (
+                    CREATE TABLE IF NOT EXISTS potholes (
                         id SERIAL PRIMARY KEY,
-                        
+
                         -- Unique Pothole Identification
                         pothole_id VARCHAR(100) UNIQUE NOT NULL,
-                        
+
                         -- Survey Information
                         survey_name VARCHAR(255) NOT NULL,
                         survey_area VARCHAR(255),
                         detection_type VARCHAR(50) DEFAULT 'capture', -- 'live' or 'capture'
-                        
+
                         -- Location Data
                         latitude DOUBLE PRECISION NOT NULL,
                         longitude DOUBLE PRECISION NOT NULL,
                         location GEOMETRY(POINT, 4326),
                         area_description TEXT,
-                        
+
                         -- Detection Metrics
                         confidence REAL NOT NULL,
                         depth REAL,
                         severity VARCHAR(20), -- 'minor', 'moderate', 'severe'
-                        
+
                         -- Bounding Box Data
                         bbox_x INTEGER,
                         bbox_y INTEGER,
                         bbox_width INTEGER,
                         bbox_height INTEGER,
                         bbox_area INTEGER,
-                        
+
                         -- Image and Media
-                        image_url TEXT,
-                        image_base64 TEXT, -- For storing small thumbnails
-                        
+                        image_url VARCHAR(500),
+                        image_data TEXT, -- base64 encoded image for persistence
+
                         -- Timestamps
                         detected_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
                         created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
                         updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-                        
+
                         -- Additional Metadata
                         device_info JSONB, -- Store device/camera info
                         weather_conditions VARCHAR(100),
                         road_type VARCHAR(100),
                         traffic_conditions VARCHAR(100),
-                        
+
                         -- Quality and Verification
                         manual_verified BOOLEAN DEFAULT FALSE,
                         verification_notes TEXT,
                         quality_score REAL, -- Overall detection quality score
-                        
+
                         -- Status and Priority
                         status VARCHAR(50) DEFAULT 'detected', -- 'detected', 'reported', 'in_repair', 'fixed'
                         priority INTEGER DEFAULT 3, -- 1=low, 2=medium, 3=high, 4=critical
-                        
+
                         -- Repair Tracking
                         repair_cost_estimate DECIMAL(10,2),
                         repair_scheduled_date TIMESTAMP WITH TIME ZONE,
@@ -132,7 +139,7 @@ class DatabaseManager:
                     );
                     """
                     cursor.execute(create_table_sql)
-                    
+
                     # Create surveys table for survey management
                     logger.info("Creating surveys table...")
                     cursor.execute("""
@@ -153,7 +160,7 @@ class DatabaseManager:
                             updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
                         );
                     """)
-                    
+
                     # Create indexes for better performance
                     logger.info("Creating indexes...")
                     indexes = [
@@ -169,10 +176,10 @@ class DatabaseManager:
                         "CREATE INDEX IF NOT EXISTS idx_surveys_status ON surveys (status);",
                         "CREATE INDEX IF NOT EXISTS idx_surveys_start_time ON surveys (start_time DESC);"
                     ]
-                    
+
                     for index_sql in indexes:
                         cursor.execute(index_sql)
-                    
+
                     # Create trigger to update location column
                     cursor.execute("""
                         CREATE OR REPLACE FUNCTION update_location()
@@ -183,17 +190,20 @@ class DatabaseManager:
                             RETURN NEW;
                         END;
                         $$ LANGUAGE plpgsql;
-                        
+                    """)
+
+                    cursor.execute("""
+                        DROP TRIGGER IF EXISTS trigger_update_location ON potholes;
                         CREATE TRIGGER trigger_update_location
                             BEFORE INSERT OR UPDATE ON potholes
                             FOR EACH ROW
                             EXECUTE FUNCTION update_location();
                     """)
-                    
+
                     # Insert sample data for testing
                     cursor.execute("SELECT COUNT(*) FROM potholes;")
                     count = cursor.fetchone()[0]
-                    
+
                     if count == 0:
                         logger.info("Adding sample data...")
                         sample_surveys = [
@@ -201,67 +211,67 @@ class DatabaseManager:
                             ("Highway 275 Survey", "Highway condition assessment", 12.3047, 76.6412),
                             ("University Area Survey", "Campus vicinity inspection", 12.2856, 76.6298)
                         ]
-                        
+
                         for survey_name, description, lat, lng in sample_surveys:
                             cursor.execute("""
                                 INSERT INTO surveys (name, description, start_location)
                                 VALUES (%s, %s, ST_SetSRID(ST_MakePoint(%s, %s), 4326))
                                 ON CONFLICT (name) DO NOTHING
                             """, (survey_name, description, lng, lat))
-                        
+
                         sample_potholes = [
                             ("PH_MAIN_STREET_001", "Main Street Survey", 12.2958, 76.6394, 0.85, 0.12, "severe"),
                             ("PH_MAIN_STREET_002", "Main Street Survey", 12.2965, 76.6400, 0.72, 0.08, "moderate"),
                             ("PH_HIGHWAY_275_001", "Highway 275 Survey", 12.3047, 76.6412, 0.91, 0.15, "severe"),
                             ("PH_UNIVERSITY_001", "University Area Survey", 12.2856, 76.6298, 0.68, 0.06, "minor")
                         ]
-                        
+
                         for pothole_id, survey_name, lat, lng, conf, depth, severity in sample_potholes:
                             cursor.execute("""
-                                INSERT INTO potholes 
+                                INSERT INTO potholes
                                 (pothole_id, survey_name, latitude, longitude, confidence, depth, severity, area_description)
                                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                             """, (pothole_id, survey_name, lat, lng, conf, depth, severity, f"Area around {lat:.4f}, {lng:.4f}"))
-                        
+
                         logger.info("Added sample surveys and potholes")
-                    
+
                     conn.commit()
             logger.info("Database schema updated successfully")
         except Exception as e:
             logger.error(f"Failed to create tables: {e}")
             raise
-    
+
     def insert_pothole(self, pothole_data):
         """Insert a new pothole record with all fields"""
         insert_sql = """
-        INSERT INTO potholes 
+        INSERT INTO potholes
         (pothole_id, survey_name, latitude, longitude, confidence, depth, severity,
-         bbox_x, bbox_y, bbox_width, bbox_height, bbox_area, image_url, 
-         area_description, detection_type, device_info)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        bbox_x, bbox_y, bbox_width, bbox_height, bbox_area, image_url, image_data,
+        area_description, detection_type, device_info)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         RETURNING id, detected_at;
         """
-        
+
         try:
             with self.get_connection() as conn:
                 with conn.cursor(cursor_factory=RealDictCursor) as cursor:
                     # Calculate severity if not provided
                     severity = pothole_data.get('severity')
                     if not severity:
-                        confidence = pothole_data['confidence']
-                        depth = pothole_data.get('depth', 0)
-                        if confidence > 0.8 or depth > 0.15:
+                        conf_val = pothole_data.get('confidence', 0) or 0
+                        depth_val = pothole_data.get('depth') or 0
+                        if conf_val > 0.8 or depth_val > 0.15:
                             severity = 'severe'
-                        elif confidence > 0.6 or depth > 0.08:
+                        elif conf_val > 0.6 or depth_val > 0.08:
                             severity = 'moderate'
                         else:
                             severity = 'minor'
-                    
+
                     # Calculate bounding box area
                     bbox_area = None
                     if pothole_data.get('bbox_width') and pothole_data.get('bbox_height'):
                         bbox_area = pothole_data['bbox_width'] * pothole_data['bbox_height']
-                    
+
                     cursor.execute(insert_sql, (
                         pothole_data['pothole_id'],
                         pothole_data['survey_name'],
@@ -276,10 +286,12 @@ class DatabaseManager:
                         pothole_data.get('bbox_height'),
                         bbox_area,
                         pothole_data.get('image_url'),
+                        pothole_data.get('image_data'),
                         pothole_data.get('area_description'),
                         pothole_data.get('detection_type', 'capture'),
                         pothole_data.get('device_info')
                     ))
+
                     result = cursor.fetchone()
                     conn.commit()
                     logger.info(f"Pothole inserted with ID: {result['id']}")
@@ -287,7 +299,7 @@ class DatabaseManager:
         except Exception as e:
             logger.error(f"Failed to insert pothole: {e}")
             raise
-    
+
     def get_all_potholes(self, limit=1000, survey_name=None):
         """Get all potholes with optional survey filter"""
         base_sql = """
@@ -296,14 +308,14 @@ class DatabaseManager:
                detection_type, detected_at, status, priority
         FROM potholes
         """
-        
+
         if survey_name:
             select_sql = base_sql + " WHERE survey_name = %s ORDER BY detected_at DESC LIMIT %s;"
             params = (survey_name, limit)
         else:
             select_sql = base_sql + " ORDER BY detected_at DESC LIMIT %s;"
             params = (limit,)
-        
+
         try:
             with self.get_connection() as conn:
                 with conn.cursor(cursor_factory=RealDictCursor) as cursor:
@@ -313,15 +325,15 @@ class DatabaseManager:
         except Exception as e:
             logger.error(f"Failed to fetch potholes: {e}")
             raise
-    
+
     def get_potholes_by_survey(self, survey_name):
         """Get all potholes for a specific survey"""
         return self.get_all_potholes(survey_name=survey_name)
-    
+
     def get_survey_statistics(self):
         """Get comprehensive survey statistics"""
         stats_sql = """
-        SELECT 
+        SELECT
             survey_name,
             COUNT(*) as total_potholes,
             COUNT(CASE WHEN severity = 'severe' THEN 1 END) as severe_count,
@@ -337,7 +349,7 @@ class DatabaseManager:
         GROUP BY survey_name
         ORDER BY total_potholes DESC;
         """
-        
+
         try:
             with self.get_connection() as conn:
                 with conn.cursor(cursor_factory=RealDictCursor) as cursor:
@@ -347,7 +359,7 @@ class DatabaseManager:
         except Exception as e:
             logger.error(f"Failed to fetch survey statistics: {e}")
             raise
-    
+
     def get_potholes_in_bounds(self, north, south, east, west, survey_name=None):
         """Get potholes within geographic bounds"""
         base_sql = """
@@ -359,14 +371,14 @@ class DatabaseManager:
         AND latitude BETWEEN %s AND %s
         AND longitude BETWEEN %s AND %s
         """
-        
+
         if survey_name:
             bounds_sql = base_sql + " AND survey_name = %s ORDER BY detected_at DESC;"
             params = (west, south, east, north, south, north, west, east, survey_name)
         else:
             bounds_sql = base_sql + " ORDER BY detected_at DESC;"
             params = (west, south, east, north, south, north, west, east)
-        
+
         try:
             with self.get_connection() as conn:
                 with conn.cursor(cursor_factory=RealDictCursor) as cursor:
@@ -376,13 +388,13 @@ class DatabaseManager:
         except Exception as e:
             logger.error(f"Failed to fetch potholes in bounds: {e}")
             raise
-    
+
     def get_pothole_by_id(self, pothole_id):
         """Get a specific pothole by its unique ID"""
         select_sql = """
         SELECT * FROM potholes WHERE pothole_id = %s;
         """
-        
+
         try:
             with self.get_connection() as conn:
                 with conn.cursor(cursor_factory=RealDictCursor) as cursor:
@@ -392,16 +404,16 @@ class DatabaseManager:
         except Exception as e:
             logger.error(f"Failed to fetch pothole {pothole_id}: {e}")
             raise
-    
+
     def update_pothole_status(self, pothole_id, status, notes=None):
         """Update pothole status and add notes"""
         update_sql = """
-        UPDATE potholes 
+        UPDATE potholes
         SET status = %s, verification_notes = COALESCE(%s, verification_notes), updated_at = CURRENT_TIMESTAMP
         WHERE pothole_id = %s
         RETURNING id, status;
         """
-        
+
         try:
             with self.get_connection() as conn:
                 with conn.cursor(cursor_factory=RealDictCursor) as cursor:
@@ -417,7 +429,7 @@ class DatabaseManager:
         except Exception as e:
             logger.error(f"Failed to update pothole status: {e}")
             raise
-    
+
     def create_survey(self, survey_data):
         """Create a new survey"""
         insert_sql = """
@@ -425,7 +437,7 @@ class DatabaseManager:
         VALUES (%s, %s, ST_SetSRID(ST_MakePoint(%s, %s), 4326), %s, %s, %s)
         RETURNING id, name, start_time;
         """
-        
+
         try:
             with self.get_connection() as conn:
                 with conn.cursor(cursor_factory=RealDictCursor) as cursor:
@@ -445,11 +457,11 @@ class DatabaseManager:
         except Exception as e:
             logger.error(f"Failed to create survey: {e}")
             raise
-    
+
     def get_all_surveys(self):
         """Get all surveys with their statistics"""
         surveys_sql = """
-        SELECT s.*, 
+        SELECT s.*,
                COALESCE(p.total_potholes, 0) as total_potholes,
                COALESCE(p.severe_count, 0) as severe_count,
                COALESCE(p.moderate_count, 0) as moderate_count,
@@ -466,7 +478,7 @@ class DatabaseManager:
         ) p ON s.name = p.survey_name
         ORDER BY s.start_time DESC;
         """
-        
+
         try:
             with self.get_connection() as conn:
                 with conn.cursor(cursor_factory=RealDictCursor) as cursor:
@@ -476,11 +488,11 @@ class DatabaseManager:
         except Exception as e:
             logger.error(f"Failed to fetch surveys: {e}")
             raise
-    
+
     def get_pothole_density(self, grid_size=0.01, survey_name=None):
         """Get pothole density data for heatmap"""
         base_sql = """
-        SELECT 
+        SELECT
             ROUND(latitude / %s) * %s as lat_grid,
             ROUND(longitude / %s) * %s as lng_grid,
             COUNT(*) as count,
@@ -488,14 +500,14 @@ class DatabaseManager:
             string_agg(DISTINCT survey_name, ', ') as surveys
         FROM potholes
         """
-        
+
         if survey_name:
             density_sql = base_sql + " WHERE survey_name = %s GROUP BY lat_grid, lng_grid HAVING COUNT(*) > 0 ORDER BY count DESC;"
             params = (grid_size, grid_size, grid_size, grid_size, survey_name)
         else:
             density_sql = base_sql + " GROUP BY lat_grid, lng_grid HAVING COUNT(*) > 0 ORDER BY count DESC;"
             params = (grid_size, grid_size, grid_size, grid_size)
-        
+
         try:
             with self.get_connection() as conn:
                 with conn.cursor(cursor_factory=RealDictCursor) as cursor:
@@ -505,23 +517,23 @@ class DatabaseManager:
         except Exception as e:
             logger.error(f"Failed to fetch pothole density: {e}")
             raise
-    
+
     def get_detailed_analytics(self, days=30, survey_name=None):
         """Get detailed analytics for the dashboard"""
-    
-    # Build conditions list safely — no f-string interpolation
+
+        # Build conditions list safely — no f-string interpolation
         conditions = ["detected_at >= CURRENT_TIMESTAMP - INTERVAL %s"]
         params = [f"{days} days"]
-    
+
         if survey_name:
             conditions.append("survey_name = %s")
             params.append(survey_name)
-    
+
         base_where = "WHERE " + " AND ".join(conditions)
 
         analytics_sql = f"""
         WITH daily_stats AS (
-            SELECT 
+            SELECT
                 DATE(detected_at) as detection_date,
                 COUNT(*) as daily_count,
                 AVG(confidence) as daily_avg_confidence
@@ -531,7 +543,7 @@ class DatabaseManager:
             ORDER BY detection_date DESC
         ),
         hourly_distribution AS (
-            SELECT 
+            SELECT
                 EXTRACT(HOUR FROM detected_at) as hour,
                 COUNT(*) as hourly_count
             FROM potholes
@@ -540,7 +552,7 @@ class DatabaseManager:
             ORDER BY hour
         ),
         severity_stats AS (
-            SELECT 
+            SELECT
                 severity,
                 COUNT(*) as count,
                 AVG(confidence) as avg_confidence,
@@ -549,17 +561,17 @@ class DatabaseManager:
             {base_where}
             GROUP BY severity
         )
-        SELECT 
+        SELECT
             'daily' as stat_type,
             json_agg(daily_stats) as data
         FROM daily_stats
         UNION ALL
-        SELECT 
+        SELECT
             'hourly' as stat_type,
             json_agg(hourly_distribution) as data
-        FROM hourly_distribution  
+        FROM hourly_distribution
         UNION ALL
-        SELECT 
+        SELECT
             'severity' as stat_type,
             json_agg(severity_stats) as data
         FROM severity_stats;
@@ -568,24 +580,31 @@ class DatabaseManager:
         try:
             with self.get_connection() as conn:
                 with conn.cursor(cursor_factory=RealDictCursor) as cursor:
-                # params repeated 3 times — once per CTE that uses base_where
+                    # params repeated 3 times — once per CTE that uses base_where
                     cursor.execute(analytics_sql, params * 3)
                     results = cursor.fetchall()
-                
+
                     analytics = {}
                     for row in results:
                         analytics[row['stat_type']] = row['data']
-                
+
                     return analytics
         except Exception as e:
             logger.error(f"Failed to fetch detailed analytics: {e}")
-        raise
-    
+            raise
+
     def close_connections(self):
         """Close all connections in the pool"""
         if self.connection_pool:
             self.connection_pool.closeall()
             logger.info("Database connections closed")
 
+
 # Global database manager instance
-db_manager = DatabaseManager()
+# Lazy initialization — don't crash on startup
+try:
+    db_manager = DatabaseManager()
+except Exception as e:
+    import logging
+    logging.getLogger(__name__).error(f"DB init failed: {e}")
+    db_manager = None

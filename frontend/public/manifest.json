@@ -1,0 +1,55 @@
+{
+  "short_name": "SmartRoad",
+  "name": "SmartRoad — AI Pothole Detection",
+  "description": "Real-time pothole detection using YOLOv8m + MiDaS depth estimation with geospatial analytics",
+  "icons": [
+    {
+      "src": "favicon.ico",
+      "sizes": "64x64 32x32 24x24 16x16",
+      "type": "image/x-icon"
+    },
+    {
+      "src": "logo192.png",
+      "type": "image/png",
+      "sizes": "192x192",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "logo512.png",
+      "type": "image/png",
+      "sizes": "512x512",
+      "purpose": "any maskable"
+    }
+  ],
+  "start_url": ".",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "theme_color": "#E8A427",
+  "background_color": "#0F1923",
+  "categories": ["utilities", "productivity"],
+  "screenshots": [
+    {
+      "src": "screenshot-home.png",
+      "sizes": "390x844",
+      "type": "image/png",
+      "form_factor": "narrow",
+      "label": "SmartRoad Home Screen"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Start Detection",
+      "short_name": "Detect",
+      "description": "Open the AI detection camera",
+      "url": "/?tab=detect",
+      "icons": [{ "src": "logo192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "View Road Map",
+      "short_name": "Map",
+      "description": "View pothole heatmap",
+      "url": "/?tab=map",
+      "icons": [{ "src": "logo192.png", "sizes": "192x192" }]
+    }
+  ]
+}

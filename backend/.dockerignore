@@ -1,0 +1,9 @@
+__pycache__/
+*.py[cod]
+*.pt
+*.pth
+.env
+venv/
+.venv/
+pothole_images/
+*.log

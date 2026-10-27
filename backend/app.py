@@ -158,23 +158,20 @@ def initialize_models():
         return False
 
 if __name__ == '__main__':
-    # Initialize models before starting the app
     models_initialized = initialize_models()
     
     if not models_initialized:
-        logger.warning("Some models failed to initialize. The app may not work correctly.")
+        logger.warning("Some models failed to initialize.")
     
-    # Create Flask app
     app = create_app()
     
-    # Get configuration from environment variables
     debug_mode = os.getenv('FLASK_DEBUG', 'False').lower() == 'true'
     host = os.getenv('FLASK_HOST', '0.0.0.0')
-    port = int(os.getenv('FLASK_PORT', 5000))
-
+    port = int(os.getenv('FLASK_PORT', 7860))  # 7860 for Hugging Face
     
-    logger.info(f"Starting Flask application on {host}:{port}")
-    logger.info(f"Debug mode: {debug_mode}")
+    logger.info(f"Starting on {host}:{port}")
+    
+    app.run(host=host, port=port, debug=debug_mode, threaded=True)
     
     try:
         app.run(
